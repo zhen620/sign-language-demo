@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>手語辨識系統 (網頁版)</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs/dist/tf.min.js"></script>
+    
+    <style>
+        body { text-align: center; background-color: #333; color: white; font-family: sans-serif; }
+        #container { position: relative; display: inline-block; }
+        video { display: none; } /* 隱藏原始影片，只顯示畫好骨架的 Canvas */
+        canvas { border: 5px solid #fff; border-radius: 10px; max-width: 100%; }
+        #result { font-size: 2rem; margin-top: 20px; color: #00ff00; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <h1>🤟 即時手語辨識</h1>
+    <div id="container">
+        <video id="input_video"></video>
+        <canvas id="output_canvas" width="640" height="480"></canvas>
+    </div>
+    <div id="result">模型載入中...</div>
+
+    <script>
+        // -----------------------------------------------------------
+        // 1. 請把剛剛用 Python 查到的標籤順序貼在這裡！
+        // -----------------------------------------------------------
+        const LABELS = [
+            "你好", "謝謝", "大家", "午安" // <--- 這裡一定要改成您的真正標籤
+        ];
+
+        const videoElement = document.getElementById('input_video');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const resultText = document.getElementById('result');
+        
+        let model;
+        let sequence = []; // 用來存連續動作 (跟 Python 的 sequence 一樣)
+
+        // 2. 載入模型
+        async function loadModel() {
+            try {
+                // 讀取轉換好的 model.json
+                model = await tf.loadLayersModel('./web_model/model.json');
+                resultText.innerText = "準備就緒，請比手語！";
+                console.log("模型載入成功");
+            } catch (error) {
+                resultText.innerText = "模型載入失敗，請檢查檔案路徑";
+                console.error(error);
+            }
+        }
+
+        // 3. 處理每一幀畫面 (MediaPipe 結果)
+        function onResults(results) {
+            // 繪製背景與骨架
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+            
+            if (results.multiHandLandmarks) {
+                for (const landmarks of results.multiHandLandmarks) {
+                    drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 5});
+                    drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 2});
+                }
+                
+                // --- 這裡開始是辨識邏輯 (模擬 Python 的 extract_feature) ---
+                if(model) {
+                    let features = [];
+                    // 這裡簡化處理：只取第一隻手，將 21 點 (x,y,z) 攤平
+                    // 注意：這裡的邏輯必須跟您 Python 訓練時一模一樣，不然會不準
+                    // 如果您 Python 有抓兩隻手，這裡也要改寫
+                    for(let i=0; i<results.multiHandLandmarks.length; i++){
+                         // 簡單示範：把所有點的 x, y, z 加入陣列
+                         for(let lm of results.multiHandLandmarks[i]){
+                             features.push(lm.x, lm.y, lm.z);
+                         }
+                    }
+                    
+                    // 補零 (如果您的模型輸入長度是固定的，比如 126，不足要補0)
+                    while (features.length < 126) features.push(0); 
+
+                    // 存入佇列 (Sequence)
+                    sequence.push(features);
+                    if(sequence.length > 30) sequence.shift(); // 保持 30 幀
+
+                    // 進行預測
+                    if(sequence.length === 30) {
+                        const inputTensor = tf.tensor([sequence]); // 轉成 Tensor
+                        const prediction = model.predict(inputTensor);
+                        const data = prediction.dataSync(); // 取得數值
+                        const maxIndex = data.indexOf(Math.max(...data)); // 找最大值索引
+                        
+                        // 顯示結果
+                        if(data[maxIndex] > 0.7) { // 信心度 > 0.7
+                            resultText.innerText = "辨識結果: " + LABELS[maxIndex];
+                        }
+                    }
+                }
+            }
+            canvasCtx.restore();
+        }
+
+        // 4. 啟動攝影機與 MediaPipe
+        const hands = new Hands({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }});
+        hands.setOptions({
+            maxNumHands: 2,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+        hands.onResults(onResults);
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 640,
+            height: 480
+        });
+        
+        loadModel(); // 先載入模型
+        camera.start(); // 啟動攝影機
+    </script>
+</body>
+</html>

@@ -45,7 +45,7 @@
         async function loadModel() {
             try {
                 // 讀取轉換好的 model.json
-                model = await tf.loadLayersModel('model.json');
+                model = await tf.loadLayersModel('./web_model/model.json');
                 resultText.innerText = "準備就緒，請比手語！";
                 console.log("模型載入成功");
             } catch (error) {
@@ -130,3 +130,4 @@
 </body>
 
 </html>
+
